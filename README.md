@@ -1,5 +1,5 @@
 # Contrastive Loss Gradient Attack (CLGA)
- Official implementation of Unsupervised Graph Poisoning Attack via Contrastive Loss Back-propagation, WWW22
+ Official implementation of [Unsupervised Graph Poisoning Attack via Contrastive Loss Back-propagation](https://arxiv.org/abs/2201.07986), WWW22
 
 
 Built based on [GCA](https://github.com/CRIPAC-DIG/GCA) and [DeepRobust](https://deeprobust.readthedocs.io/en/latest/#).
@@ -20,8 +20,10 @@ python baseline_attacks.py --dataset Cora --method dice --rate 0.10 --device cud
 ```
 It will save one poisoned adjacency matrix in ./poisoned_adj.
 
-3.To train the graph contrastive model with the poisoned graph
+3.To train the graph contrastive model for node classification with the poisoned graph
 ```
 python train_GCA.py --dataset Cora --perturb --attack_method CLGA --attack_rate 0.10 --device cuda:0
 ```
 It will load and train on the corresponding poisoned adjacency matrix specified by dataset, attack_method and attack_rate.
+
+For link prediction, run train_LP.py.
