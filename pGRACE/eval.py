@@ -3,6 +3,9 @@ from typing import Optional
 import torch
 from torch.optim import Adam
 import torch.nn as nn
+import torch.nn.functional as F
+from torch_geometric.utils import add_self_loops, structured_negative_sampling
+from sklearn.metrics import roc_auc_score
 
 from pGRACE.model import LogReg
 
@@ -115,3 +118,82 @@ class MulticlassEvaluator:
 
     def eval(self, res):
         return {'acc': self._eval(**res)}
+
+
+class LPEvaluator:
+    def __init__(self, *args, **kwargs):
+        pass
+
+    @staticmethod
+    def _eval(scores, negative_edge_index, target_edge_index):
+        edge_index = torch.cat([negative_edge_index, target_edge_index], -1)
+        ranking_scores = scores[edge_index[0], edge_index[1]]
+        ranking_labels = torch.cat([torch.zeros(negative_edge_index.shape[1]), torch.ones(target_edge_index.shape[1])]).to(scores.device)
+        auc = roc_auc_score(ranking_labels.detach().cpu().numpy(), ranking_scores.detach().cpu().numpy())
+        return auc
+
+    def eval(self, res):
+        return self._eval(**res)
+
+
+def link_prediction(z,
+                    edge_index,
+                    train_edge_index,
+                    val_edge_index,
+                    test_edge_index,
+                    num_nodes,
+                    evaluator,
+                    num_epochs: int = 5000,
+                    test_device: Optional[str] = None,
+                    verbose: bool = False,
+                    ):
+    test_device = z.device if test_device is None else test_device
+    z = z.detach().to(test_device)
+    num_hidden = z.size(1)
+    observed_edge_sp_adj = torch.sparse.FloatTensor(edge_index,
+                                                    torch.ones(edge_index.shape[1]).to(test_device),
+                                                    [num_nodes, num_nodes])
+    observed_edge_adj = observed_edge_sp_adj.to_dense().to(test_device)
+    negative_edges = 1 - observed_edge_adj - torch.eye(num_nodes).to(test_device)
+    negative_edge_index = torch.nonzero(negative_edges).t()
+
+    projecter = LogReg(num_hidden, num_hidden).to(test_device)
+    optimizer = Adam(projecter.parameters(), lr=0.01, weight_decay=0.0)
+
+    best_test_auc = 0
+    best_val_auc = 0
+    for epoch in range(num_epochs):
+        projecter.train()
+        optimizer.zero_grad()
+
+        output = projecter(z)
+        output = F.normalize(output)
+        scores = torch.mm(output, output.t())
+
+        edge_index_with_self_loops = add_self_loops(train_edge_index)[0]
+        train_u, train_i, train_j = structured_negative_sampling(edge_index_with_self_loops, num_nodes)
+        train_u = train_u[:train_edge_index.shape[1]]
+        train_i = train_i[:train_edge_index.shape[1]]
+        train_j = train_j[:train_edge_index.shape[1]]
+        loss = -torch.log(torch.sigmoid(scores[train_u, train_i] - scores[train_u, train_j])).sum()
+        loss.backward()
+        optimizer.step()
+
+        if (epoch + 1) % 20 == 0:
+            test_auc = evaluator.eval({
+                'scores': scores,
+                'negative_edge_index': negative_edge_index,
+                'target_edge_index': test_edge_index
+            })
+            val_auc = evaluator.eval({
+                'scores': scores,
+                'negative_edge_index': negative_edge_index,
+                'target_edge_index': val_edge_index
+            })
+            if val_auc > best_val_auc:
+                best_val_auc = val_auc
+                best_test_auc = test_auc
+            if verbose:
+                print(f'logreg epoch {epoch}: best test acc {best_test_auc}')
+
+    return {'auc': best_test_auc, 'model': projecter}
