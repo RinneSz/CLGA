@@ -175,6 +175,6 @@ if __name__ == '__main__':
         if 'train' in log:
             print(f'(T) | Epoch={epoch:03d}, loss={loss:.4f}, training time={end - start}')
 
-    auc = test(final=True, sparse=True)
+    auc = test(final=True)
     if 'final' in log:
         print(f'auc={auc}')
